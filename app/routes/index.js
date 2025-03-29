@@ -1,3 +1,5 @@
+const path = require("path");
+const rateLimit = require("express-rate-limit");
 const SessionHandler = require("./session");
 const ProfileHandler = require("./profile");
 const BenefitsHandler = require("./benefits");
@@ -5,96 +7,111 @@ const ContributionsHandler = require("./contributions");
 const AllocationsHandler = require("./allocations");
 const MemosHandler = require("./memos");
 const ResearchHandler = require("./research");
-const {
-    environmentalScripts
-} = require("../../config/config");
+const { environmentalScripts } = require("../../config/config");
 const ErrorHandler = require("./error").errorHandler;
 
 const index = (app, db) => {
+  "use strict";
 
-    "use strict";
+  const sessionHandler = new SessionHandler(db);
+  const profileHandler = new ProfileHandler(db);
+  const benefitsHandler = new BenefitsHandler(db);
+  const contributionsHandler = new ContributionsHandler(db);
+  const allocationsHandler = new AllocationsHandler(db);
+  const memosHandler = new MemosHandler(db);
+  const researchHandler = new ResearchHandler(db);
 
-    const sessionHandler = new SessionHandler(db);
-    const profileHandler = new ProfileHandler(db);
-    const benefitsHandler = new BenefitsHandler(db);
-    const contributionsHandler = new ContributionsHandler(db);
-    const allocationsHandler = new AllocationsHandler(db);
-    const memosHandler = new MemosHandler(db);
-    const researchHandler = new ResearchHandler(db);
+  const isLoggedIn = sessionHandler.isLoggedInMiddleware;
+  const isAdmin = sessionHandler.isAdminUserMiddleware;
 
-    // Middleware to check if a user is logged in
-    const isLoggedIn = sessionHandler.isLoggedInMiddleware;
+  const limiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 100,
+    message: "Too many requests, please try again later.",
+  });
 
-    //Middleware to check if user has admin rights
-    const isAdmin = sessionHandler.isAdminUserMiddleware;
+  app.use(limiter);
 
-    // The main page of the app
-    app.get("/", sessionHandler.displayWelcomePage);
+  app.get("/", sessionHandler.displayWelcomePage);
+  app.get("/login", sessionHandler.displayLoginPage);
+  app.post("/login", limiter, sessionHandler.handleLoginRequest);
+  app.get("/signup", sessionHandler.displaySignupPage);
+  app.post("/signup", limiter, sessionHandler.handleSignup);
+  app.get("/logout", sessionHandler.displayLogoutPage);
+  app.get("/dashboard", isLoggedIn, sessionHandler.displayWelcomePage);
+  app.get("/profile", isLoggedIn, profileHandler.displayProfile);
+  app.post("/profile", isLoggedIn, limiter, profileHandler.handleProfileUpdate);
+  app.get(
+    "/contributions",
+    isLoggedIn,
+    contributionsHandler.displayContributions
+  );
+  app.post(
+    "/contributions",
+    isLoggedIn,
+    limiter,
+    contributionsHandler.handleContributionsUpdate
+  );
+  app.get("/benefits", isLoggedIn, benefitsHandler.displayBenefits);
+  app.post(
+    "/benefits",
+    isLoggedIn,
+    isAdmin,
+    limiter,
+    benefitsHandler.updateBenefits
+  );
+  app.get(
+    "/allocations/:userId",
+    isLoggedIn,
+    allocationsHandler.displayAllocations
+  );
+  app.get("/memos", isLoggedIn, memosHandler.displayMemos);
+  app.post("/memos", isLoggedIn, limiter, memosHandler.addMemos);
 
-    // Login form
-    app.get("/login", sessionHandler.displayLoginPage);
-    app.post("/login", sessionHandler.handleLoginRequest);
+  const allowedUrls = [
+    "/home",
+    "/profile",
+    "/dashboard"
+  ];
 
-    // Signup form
-    app.get("/signup", sessionHandler.displaySignupPage);
-    app.post("/signup", sessionHandler.handleSignup);
+  function isAllowedUrl(path) {
+    return allowedUrls.includes(path);
+  }
 
-    // Logout page
-    app.get("/logout", sessionHandler.displayLogoutPage);
+  const app = require("express")();
 
-    // The main page of the app
-    app.get("/dashboard", isLoggedIn, sessionHandler.displayWelcomePage);
+  app.get("/redirect", function (req, res) {
+    // Validate the target URL
+    let target = req.query["target"];
+    if (isAllowedUrl(target)) {
+      res.redirect(target);
+    } else {
+      res.redirect("/home");
+    }
+  });
 
-    // Profile page
-    app.get("/profile", isLoggedIn, profileHandler.displayProfile);
-    app.post("/profile", isLoggedIn, profileHandler.handleProfileUpdate);
+  app.get("/tutorial", (req, res) => {
+    return res.render("tutorial/a1", { environmentalScripts });
+  });
 
-    // Contributions Page
-    app.get("/contributions", isLoggedIn, contributionsHandler.displayContributions);
-    app.post("/contributions", isLoggedIn, contributionsHandler.handleContributionsUpdate);
+  app.get("/tutorial/:page", (req, res) => {
+    const { page } = req.params;
+    const allowedPages = ["a1", "a2", "a3"];
+    if (!allowedPages.includes(page)) {
+      res.status(403).send("Forbidden");
+      return;
+    }
+    const tutorialRoot = path.join(__dirname, "../../views/tutorial");
+    const resolvedPath = path.resolve(tutorialRoot, page);
+    if (!resolvedPath.startsWith(tutorialRoot)) {
+      res.status(403).send("Forbidden");
+      return;
+    }
+    return res.render(`tutorial/${page}`, { environmentalScripts });
+  });
 
-    // Benefits Page
-    app.get("/benefits", isLoggedIn, benefitsHandler.displayBenefits);
-    app.post("/benefits", isLoggedIn, benefitsHandler.updateBenefits);
-    /* Fix for A7 - checks user role to implement  Function Level Access Control
-     app.get("/benefits", isLoggedIn, isAdmin, benefitsHandler.displayBenefits);
-     app.post("/benefits", isLoggedIn, isAdmin, benefitsHandler.updateBenefits);
-     */
-
-    // Allocations Page
-    app.get("/allocations/:userId", isLoggedIn, allocationsHandler.displayAllocations);
-
-    // Memos Page
-    app.get("/memos", isLoggedIn, memosHandler.displayMemos);
-    app.post("/memos", isLoggedIn, memosHandler.addMemos);
-
-    // Handle redirect for learning resources link
-    app.get("/learn", isLoggedIn, (req, res) => {
-        // Insecure way to handle redirects by taking redirect url from query string
-        return res.redirect(req.query.url);
-    });
-
-    // Handle redirect for learning resources link
-    app.get("/tutorial", (req, res) => {
-        return res.render("tutorial/a1", {
-            environmentalScripts
-        });
-    });
-
-    app.get("/tutorial/:page", (req, res) => {
-        const {
-            page
-        } = req.params
-        return res.render(`tutorial/${page}`, {
-            environmentalScripts
-        });
-    });
-
-    // Research Page
-    app.get("/research", isLoggedIn, researchHandler.displayResearch);
-
-    // Error handling middleware
-    app.use(ErrorHandler);
+  app.get("/research", isLoggedIn, researchHandler.displayResearch);
+  app.use(ErrorHandler);
 };
 
 module.exports = index;
